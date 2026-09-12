@@ -1,0 +1,233 @@
+// DoShare — Prisma schema
+// Mirrors DATA_MODEL.md. Run `npx prisma generate` and
+// `npx prisma migrate dev --name init` after setting DATABASE_URL.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- Identity ----------
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String?
+  status       UserStatus @default(ACTIVE)
+  createdAt    DateTime @default(now())
+
+  documents       Document[]
+  accessSessions  AccessSession[]
+  notifications   Notification[]
+
+  @@map("users")
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+// ---------- Documents ----------
+
+model Document {
+  id          String   @id @default(cuid())
+  ownerId     String
+  owner       User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  name        String
+  mimeType    String
+  sizeBytes   Int
+  pageCount   Int?
+  storageRef  String
+  hash        String
+
+  status      DocumentStatus @default(PROCESSING)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  deletedAt   DateTime?
+
+  versions        DocumentVersion[]
+  sessionLinks    AccessSessionDocument[]
+  events          AccessEvent[]
+
+  @@index([ownerId, status])
+  @@map("documents")
+}
+
+enum DocumentStatus {
+  UPLOADING
+  PROCESSING
+  AVAILABLE
+  FAILED
+  ARCHIVED
+  DELETED
+}
+
+model DocumentVersion {
+  id          String   @id @default(cuid())
+  documentId  String
+  document    Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  storageRef  String
+  hash        String
+  createdAt   DateTime @default(now())
+
+  @@map("document_versions")
+}
+
+// ---------- Access Sessions ----------
+
+model AccessSession {
+  id           String   @id @default(cuid())
+  code         String   @unique
+  tokenHash    String   @unique
+
+  ownerId      String
+  owner        User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  purpose      SessionPurpose
+  status       SessionStatus @default(CREATED)
+
+  createdAt    DateTime @default(now())
+  expiresAt    DateTime
+  revokedAt    DateTime?
+
+  pinHash      String?
+  oneTimeUse   Boolean  @default(false)
+  maxUses      Int?
+  useCount     Int      @default(0)
+
+  documents    AccessSessionDocument[]
+  policy       AccessPolicy?
+  events       AccessEvent[]
+  printJobs    PrintJob[]
+
+  @@index([ownerId, status])
+  @@map("access_sessions")
+}
+
+enum SessionPurpose {
+  PRINT
+  VIEW
+  DOWNLOAD
+  SUBMIT
+  VERIFY
+}
+
+enum SessionStatus {
+  CREATED
+  WAITING
+  ACTIVE
+  IN_PROGRESS
+  COMPLETED
+  EXPIRED
+  REVOKED
+  BLOCKED
+}
+
+model AccessSessionDocument {
+  sessionId   String
+  documentId  String
+
+  session     AccessSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  document    Document      @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@id([sessionId, documentId])
+  @@map("access_session_documents")
+}
+
+model AccessPolicy {
+  sessionId            String  @id
+  session              AccessSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  canView              Boolean @default(true)
+  canDownload          Boolean @default(false)
+  canPrint             Boolean @default(false)
+
+  printCopyLimit       Int?
+  downloadLimit        Int?
+
+  allowResharing       Boolean @default(false)
+  watermarkEnabled     Boolean @default(true)
+  requirePin           Boolean @default(false)
+  requireManualApproval Boolean @default(false)
+
+  @@map("access_policies")
+}
+
+// ---------- Audit ----------
+
+model AccessEvent {
+  id          String   @id @default(cuid())
+  sessionId   String
+  session     AccessSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  documentId  String?
+  document    Document? @relation(fields: [documentId], references: [id], onDelete: SetNull)
+
+  type        AccessEventType
+  actorLabel  String   @default("Guest")
+  metadata    Json?
+  createdAt   DateTime @default(now())
+
+  @@index([sessionId, createdAt])
+  @@map("access_events")
+}
+
+enum AccessEventType {
+  SESSION_CREATED
+  SESSION_OPENED
+  DOCUMENT_VIEWED
+  DOCUMENT_PRINTED
+  DOWNLOAD_ATTEMPTED
+  ACCESS_REVOKED
+  SESSION_EXPIRED
+  SESSION_COMPLETED
+  PIN_FAILED
+}
+
+// ---------- Print ----------
+
+model PrintJob {
+  id          String   @id @default(cuid())
+  sessionId   String
+  session     AccessSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  paperSize   String   @default("A4")
+  color       Boolean  @default(false)
+  copies      Int      @default(1)
+  pageRange   String?
+
+  status      PrintJobStatus @default(QUEUED)
+  createdAt   DateTime @default(now())
+  completedAt DateTime?
+
+  @@map("print_jobs")
+}
+
+enum PrintJobStatus {
+  QUEUED
+  PRINTING
+  COMPLETED
+  FAILED
+}
+
+// ---------- Notifications ----------
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String
+  message   String
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@map("notifications")
+}
